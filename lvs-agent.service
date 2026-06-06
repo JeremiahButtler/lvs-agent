@@ -1,0 +1,17 @@
+[Unit]
+Description=LVS Agent — per-user license verification daemon
+Documentation=https://github.com/JeremiahButtler/lvs-agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/lvs-agent/agent.py
+Restart=always
+RestartSec=5
+User=root
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lvs-agent
+
+[Install]
+WantedBy=multi-user.target

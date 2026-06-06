@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Project Log &middot; LVS Agent</title>
+  <style>
+    :root{
+      --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:20px;--s6:24px;--s8:32px;
+      --radius:12px;--radius-sm:8px;--radius-pill:999px;
+      --bg:#f0f4f8;--surface:#ffffff;--line:#dde4ec;--border:#c8d2de;
+      --accent:#0d6e8a;--accent2:#074f65;--teal:#17a2b8;--teal-deep:#0e7a8a;
+      --fg:#1a2332;--dim:#5a6a7a;--success:#2a7a4a;
+      --shadow:0 1px 2px rgba(13,30,50,.06),0 6px 16px rgba(13,30,50,.06);
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:"Segoe UI",system-ui,Arial,sans-serif;
+      background:var(--bg);color:var(--fg);line-height:1.5}
+    .topbar{display:flex;align-items:center;gap:var(--s3);
+      background:linear-gradient(180deg,#0d6e8a 0%,#074f65 100%);color:#fff;
+      padding:0 var(--s6);height:56px;border-bottom:3px solid var(--teal)}
+    .topbar .brand{color:#fff;font-weight:700;font-size:1.15rem;letter-spacing:.01em}
+    .topbar .sub{color:rgba(255,255,255,.7);font-size:.82rem;margin-left:var(--s2)}
+    .wrap{max-width:900px;margin:var(--s8) auto;padding:0 var(--s4)}
+    h1{font-size:1.6rem;font-weight:700;margin:0 0 var(--s5)}
+    h2{font-size:.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
+      margin:0 0 var(--s4);color:var(--dim)}
+    .card{background:var(--surface);border:1px solid var(--line);
+      border-radius:var(--radius);padding:var(--s6);margin-bottom:var(--s5);
+      box-shadow:var(--shadow)}
+    table{width:100%;border-collapse:collapse}
+    th,td{text-align:left;padding:var(--s3);border-bottom:1px solid var(--line);vertical-align:top}
+    table.kv th{width:140px;color:var(--dim);font-weight:600}
+    .card-head-row{display:flex;align-items:center;justify-content:space-between;
+      flex-wrap:wrap;gap:.5rem;margin-bottom:.75rem}
+    .card-head-row h2{margin:0}
+    input[type=search]{width:100%;max-width:320px;padding:6px 10px;font-size:.9rem;
+      border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--fg)}
+    .log-entry{padding:.65rem 0;border-bottom:1px solid var(--line)}
+    .log-entry:last-child{border-bottom:none}
+    .log-entry h3{margin:0 0 .35rem;font-size:.95rem;font-weight:600;color:var(--fg)}
+    .log-entry p,.log-entry li{margin:0;font-size:.88rem;line-height:1.55;color:var(--fg)}
+    .log-entry ul{margin:.35rem 0 0 1.2rem;padding:0}
+    code{font-family:Consolas,"Courier New",monospace;font-size:.84rem;
+      background:#eef2f6;border-radius:4px;padding:1px 5px;color:var(--accent2)}
+    .foot{text-align:center;color:var(--dim);font-size:.78rem;padding:var(--s6) 0}
+    .hidden{display:none}
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <span class="brand">LVS Agent</span>
+  <span class="sub">Project Log</span>
+</header>
+<main class="wrap">
+<h1>Project Log</h1>
+
+<div class="card">
+  <h2>Resume Brief</h2>
+  <table class="kv">
+    <tr>
+      <th>What it is</th>
+      <td>A public Linux agent package that third-party client websites install to enforce LVS per-user licensing. The agent exposes a local HTTP API (<code>POST /authorize</code>, <code>POST /revoke</code>, <code>GET /status</code>, <code>GET /health</code>) that the site's backend calls on localhost. It handles all LVS communication, grant-token caching, offline grace, and license key storage.</td>
+    </tr>
+    <tr>
+      <th>Status</th>
+      <td>v1.0.0 — initial implementation complete.</td>
+    </tr>
+    <tr>
+      <th>Install</th>
+      <td>One-line: <code>curl -sSL https://raw.githubusercontent.com/JeremiahButtler/lvs-agent/main/install.sh | sudo bash</code> — or clone the repo and run <code>sudo bash install.sh</code>.</td>
+    </tr>
+    <tr>
+      <th>Architecture</th>
+      <td><code>agent.py</code> — Python 3 stdlib HTTP server (optional <code>requests</code>); <code>install.sh</code> — distro-detecting installer (apt/dnf/yum/apk); <code>lvs-agent.service</code> — systemd unit; <code>snippets/</code> — PHP, Python, Node.js, and nginx integration examples. Config at <code>/opt/lvs-agent/config.json</code> (mode 600). Grant cache SQLite at <code>/opt/lvs-agent/grants.db</code>.</td>
+    </tr>
+    <tr>
+      <th>Repo</th>
+      <td><a href="https://github.com/JeremiahButtler/lvs-agent" target="_blank" rel="noopener">https://github.com/JeremiahButtler/lvs-agent</a> (public)</td>
+    </tr>
+    <tr>
+      <th>What's next</th>
+      <td>Phase 4: acceptance testing on aideamaker.com + bearlydefares.com. Validate full authorize/revoke/offline-grace flow against live LVS.</td>
+    </tr>
+  </table>
+</div>
+
+<div class="card">
+  <div class="card-head-row">
+    <h2>Change history (1 entry)</h2>
+    <input type="search" id="log-search" placeholder="Search history…" autocomplete="off">
+  </div>
+  <div id="log-entries">
+
+<div class="log-entry" data-text="2026-06-05 initial implementation lvs agent v1.0.0 agent.py asyncio http server authorize revoke status health sqlite grant cache offline grace install.sh distro-detecting installer apt dnf yum apk systemd service snippets php python nodejs nginx">
+  <h3>2026-06-05 — Initial implementation: LVS Agent v1.0.0</h3>
+  <ul>
+    <li><strong>What changed:</strong> Full initial implementation of the LVS Agent daemon.</li>
+    <li><strong>Why:</strong> Third-party client websites needed a standard, installable agent to enforce per-user licensing through LVS without building their own HTTP + caching layer.</li>
+    <li><strong>Details:</strong>
+      <ul>
+        <li><code>agent.py</code> — Python 3 stdlib HTTP server; <code>/authorize</code> (cache-first + offline grace), <code>/revoke</code>, <code>/status</code>, <code>/health</code>; SQLite grant cache; rotating log at <code>/var/log/lvs-agent.log</code>; binds to <code>127.0.0.1</code> only.</li>
+        <li><code>install.sh</code> — distro-detecting installer (apt/dnf/yum/apk); installs Python 3 + pip + requests; prompts for LVS URL, license key, port; writes <code>config.json</code> (mode 600); enables and starts systemd service.</li>
+        <li><code>uninstall.sh</code> — stops/disables service, removes <code>/opt/lvs-agent/</code>, removes systemd unit.</li>
+        <li><code>lvs-agent.service</code> — systemd unit template.</li>
+        <li><code>snippets/php_example.php</code>, <code>snippets/python_example.py</code>, <code>snippets/node_example.js</code>, <code>snippets/nginx_auth.conf</code> — integration examples.</li>
+        <li><code>FEATURES.md</code>, <code>CREDITS.md</code>, <code>PROJECT_LOG.md</code>, <code>project-log.html</code> — project documentation.</li>
+      </ul>
+    </li>
+    <li><strong>Files created:</strong> All files — initial commit.</li>
+  </ul>
+</div>
+
+  </div>
+</div>
+
+</main>
+<footer class="foot">Copyright &copy; 2026 AideaMaker LLC</footer>
+<script>
+  (function () {
+    var input = document.getElementById('log-search');
+    var entries = document.querySelectorAll('#log-entries .log-entry');
+    if (!input) return;
+    input.addEventListener('input', function () {
+      var q = input.value.trim().toLowerCase();
+      entries.forEach(function (el) {
+        var text = (el.getAttribute('data-text') || '') + ' ' + el.textContent;
+        if (!q || text.toLowerCase().indexOf(q) !== -1) {
+          el.classList.remove('hidden');
+        } else {
+          el.classList.add('hidden');
+        }
+      });
+    });
+  }());
+</script>
+</body>
+</html>
