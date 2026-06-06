@@ -64,7 +64,7 @@
     </tr>
     <tr>
       <th>Status</th>
-      <td>v1.1.0 — security hardening complete. Bearer-token auth, dedicated unprivileged service user, correct HTTP status codes, HTTPS enforcement.</td>
+      <td>v1.2.0 — file-integrity hash reporting added. Agent computes SHA-256 of its own source at startup and sends <code>X-Agent-Version</code> + <code>X-Agent-Hash</code> headers on every outbound LVS authorize/revoke request.</td>
     </tr>
     <tr>
       <th>Install</th>
@@ -80,17 +80,34 @@
     </tr>
     <tr>
       <th>What's next</th>
-      <td>Build integration documentation page on the LVS website (detailed install guide for client users, design-review guided). Phase 4: acceptance testing on aideamaker.com + bearlydefares.com. Validate full authorize/revoke/offline-grace flow against live LVS.</td>
+      <td>LVS server-side: parse and log <code>X-Agent-Version</code> / <code>X-Agent-Hash</code> headers from agent requests for integrity dashboarding. Build integration documentation page on the LVS website (detailed install guide for client users, design-review guided). Phase 4: acceptance testing on aideamaker.com + bearlydefares.com. Validate full authorize/revoke/offline-grace flow against live LVS.</td>
     </tr>
   </table>
 </div>
 
 <div class="card">
   <div class="card-head-row">
-    <h2>Change history (2 entries)</h2>
+    <h2>Change history (3 entries)</h2>
     <input type="search" id="log-search" placeholder="Search history…" autocomplete="off">
   </div>
   <div id="log-entries">
+
+<div class="log-entry" data-text="2026-06-05 v1.2.0 file integrity hash sha256 agent hash x-agent-version x-agent-hash outbound lvs authorize revoke hashlib startup tamper detection">
+  <h3>2026-06-05 — v1.2.0: File-integrity hash reporting</h3>
+  <ul>
+    <li><strong>What changed:</strong> Agent computes SHA-256 of its own source file (<code>agent.py</code>) at startup and sends <code>X-Agent-Version</code> and <code>X-Agent-Hash</code> headers on every outbound authorize and revoke request to the LVS server.</li>
+    <li><strong>Why:</strong> Allows the LVS server to detect unauthorized modifications or file tampering on client deployments by comparing the reported hash against the known-good hash for that version.</li>
+    <li><strong>Details:</strong>
+      <ul>
+        <li><code>import hashlib</code> added to stdlib imports.</li>
+        <li><code>AGENT_HASH</code> computed at module level via <code>hashlib.sha256(open(__file__, "rb").read()).hexdigest()</code> with fallback <code>"unknown"</code> on any exception.</li>
+        <li>VERSION bumped from <code>1.1.0</code> to <code>1.2.0</code>.</li>
+        <li><code>_lvs_post()</code> headers extended with <code>X-Agent-Version</code> and <code>X-Agent-Hash</code>. Outbound to LVS only — the incoming local HTTP handler is unchanged.</li>
+      </ul>
+    </li>
+    <li><strong>Files touched:</strong> <code>agent.py</code>, <code>PROJECT_LOG.md</code>, <code>project-log.html</code>.</li>
+  </ul>
+</div>
 
 <div class="log-entry" data-text="2026-06-05 security hardening v1.1.0 bearer token auth local_token drop root systemd hardening unprivileged user lvs-agent NoNewPrivileges ProtectSystem nginx fail-open status codes 200 403 503 https enforcement threading threadinghttpserver request size cap input validation exception narrowing curl proto https">
   <h3>2026-06-05 — Security hardening: v1.1.0</h3>

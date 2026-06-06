@@ -2,6 +2,7 @@
 # Part of the License Verification Server ecosystem
 # Author: Jeremiah Buttler
 
+import hashlib
 import json
 import logging
 import logging.handlers
@@ -17,13 +18,21 @@ from urllib.request import Request, urlopen
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 CONFIG_PATH = "/opt/lvs-agent/config.json"
 DB_PATH = "/opt/lvs-agent/grants.db"
 LOG_PATH = "/var/log/lvs-agent.log"
 MAX_BODY_BYTES = 65_536  # 64 KB — payloads are tiny; cap prevents local DoS
 MAX_ID_LEN = 256
 VALID_KINDS = frozenset({"user", "seat", "device"})
+
+# Compute agent file hash at startup for integrity reporting to LVS
+try:
+    AGENT_HASH: str = hashlib.sha256(
+        open(__file__, "rb").read()
+    ).hexdigest()
+except Exception:
+    AGENT_HASH = "unknown"
 
 DEFAULT_CONFIG = {
     "license_key": "",
@@ -174,7 +183,11 @@ def _lvs_post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     lvs_url = CONFIG.get("lvs_url", DEFAULT_CONFIG["lvs_url"]).rstrip("/")
     url = f"{lvs_url}{path}"
     body = json.dumps(payload).encode("utf-8")
-    req = Request(url, data=body, headers={"Content-Type": "application/json"})
+    req = Request(url, data=body, headers={
+        "Content-Type": "application/json",
+        "X-Agent-Version": VERSION,
+        "X-Agent-Hash": AGENT_HASH,
+    })
     ctx = _ssl_context() if url.startswith("https://") else None
     with urlopen(req, timeout=8, context=ctx) as resp:
         return json.loads(resp.read().decode("utf-8"))

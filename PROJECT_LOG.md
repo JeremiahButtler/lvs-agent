@@ -5,15 +5,26 @@
 | Field | Detail |
 |---|---|
 | **What it is** | A public Linux agent package that third-party client websites install to enforce LVS per-user licensing. The agent exposes a local HTTP API (`POST /authorize`, `POST /revoke`, `GET /status`, `GET /health`) that the site's backend calls on localhost. It handles all LVS communication, grant-token caching, offline grace, and license key storage. |
-| **Status** | v1.1.0 — security hardening complete. Bearer-token auth, dedicated unprivileged service user, correct HTTP status codes, HTTPS enforcement. |
+| **Status** | v1.2.0 — file-integrity hash reporting added. Agent computes SHA-256 of its own source at startup and sends `X-Agent-Version` + `X-Agent-Hash` headers on every outbound LVS authorize/revoke request. |
 | **Install** | One-line: `curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/JeremiahButtler/lvs-agent/main/install.sh \| sudo bash` — or clone the repo and run `sudo bash install.sh`. |
 | **Architecture** | `agent.py` — Python 3 `ThreadingHTTPServer` (stdlib-only); bearer-token auth (`local_token`); 200/403/503 status codes; HTTPS enforcement. `install.sh` — distro-detecting installer (apt/dnf/yum/apk); creates `lvs-agent` system user; generates `local_token`. `lvs-agent.service` — systemd unit with full hardening (NoNewPrivileges, ProtectSystem, PrivateTmp). `snippets/` — PHP, Python, Node.js, nginx examples (all pass `Authorization: Bearer <token>`). Config at `/opt/lvs-agent/config.json` (mode 600, owned by `lvs-agent`). Grant cache SQLite at `/opt/lvs-agent/grants.db`. |
 | **Repo** | https://github.com/JeremiahButtler/lvs-agent (public) |
-| **What's next** | Build integration documentation page on the LVS website (detailed install guide for client users, design-review guided). Phase 4: acceptance testing on aideamaker.com + bearlydefares.com. Validate full authorize/revoke/offline-grace flow against live LVS. |
+| **What's next** | LVS server-side: parse and log `X-Agent-Version` / `X-Agent-Hash` headers from agent requests for integrity dashboarding. Build integration documentation page on the LVS website (detailed install guide for client users, design-review guided). Phase 4: acceptance testing on aideamaker.com + bearlydefares.com. Validate full authorize/revoke/offline-grace flow against live LVS. |
 
 ---
 
 ## Change History
+
+### 2026-06-05 — v1.2.0: File-integrity hash reporting
+
+- **What changed:** Agent computes SHA-256 of its own source file (`agent.py`) at startup and sends `X-Agent-Version` and `X-Agent-Hash` headers on every outbound authorize and revoke request to the LVS server.
+- **Why:** Allows the LVS server to detect unauthorized modifications or file tampering on client deployments by comparing the reported hash against the known-good hash for that version.
+- **Details:**
+  - `import hashlib` added to stdlib imports.
+  - `AGENT_HASH` computed at module level via `hashlib.sha256(open(__file__, "rb").read()).hexdigest()` with a safe fallback of `"unknown"` on any exception.
+  - `VERSION` bumped from `1.1.0` to `1.2.0`.
+  - `_lvs_post()` headers dict extended with `"X-Agent-Version": VERSION` and `"X-Agent-Hash": AGENT_HASH`. These headers go outbound to LVS only — the incoming local HTTP handler is unchanged.
+- **Files touched:** `agent.py`, `PROJECT_LOG.md`, `project-log.html`.
 
 ### 2026-06-05 — Security hardening: v1.1.0
 
