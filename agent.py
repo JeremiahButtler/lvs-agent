@@ -2,31 +2,35 @@
 # Part of the License Verification Server ecosystem
 # Author: Jeremiah Buttler
 
-import asyncio
 import json
 import logging
 import logging.handlers
-import os
+import secrets
 import sqlite3
+import ssl
 import time
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 CONFIG_PATH = "/opt/lvs-agent/config.json"
 DB_PATH = "/opt/lvs-agent/grants.db"
 LOG_PATH = "/var/log/lvs-agent.log"
+MAX_BODY_BYTES = 65_536  # 64 KB — payloads are tiny; cap prevents local DoS
+MAX_ID_LEN = 256
+VALID_KINDS = frozenset({"user", "seat", "device"})
 
 DEFAULT_CONFIG = {
     "license_key": "",
     "lvs_url": "https://www.licenseverificationserver.com",
     "port": 8788,
     "offline_grace_seconds": 86400,
+    "local_token": "",  # shared secret between site backend and agent
 }
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
@@ -55,7 +59,7 @@ def setup_logging() -> logging.Logger:
 
 logger = setup_logging()
 
-# ─── Config ───────────────────────────────────────────────────────────────────
+# ─── Config ──────────────────────────────────────────────────────────────────
 
 def load_config() -> Dict[str, Any]:
     try:
@@ -72,6 +76,24 @@ def load_config() -> Dict[str, Any]:
 
 
 CONFIG: Dict[str, Any] = load_config()
+
+# ─── URL validation ───────────────────────────────────────────────────────────
+
+def _validate_lvs_url(url: str) -> None:
+    """Require HTTPS for remote LVS URLs. Allow plain HTTP for localhost dev only."""
+    if url.startswith(("http://127.", "http://localhost")):
+        logger.warning(
+            "LVS URL is plain HTTP (%s) — acceptable only for local dev", url
+        )
+        return
+    if not url.startswith("https://"):
+        logger.error(
+            "LVS URL must use HTTPS, got: %r — refusing to start. "
+            "Edit %s and set lvs_url to an https:// address.",
+            url,
+            CONFIG_PATH,
+        )
+        raise SystemExit(1)
 
 # ─── Grant cache (SQLite) ─────────────────────────────────────────────────────
 
@@ -142,22 +164,29 @@ def cache_count() -> int:
 
 # ─── LVS HTTP helpers ─────────────────────────────────────────────────────────
 
+def _ssl_context() -> ssl.SSLContext:
+    """Verified SSL context using system CAs — explicit, not implicit."""
+    return ssl.create_default_context()
+
+
 def _lvs_post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    """POST to LVS and return the parsed JSON response. Raises on network error."""
+    """POST to LVS and return parsed JSON. Raises on network or protocol error."""
     lvs_url = CONFIG.get("lvs_url", DEFAULT_CONFIG["lvs_url"]).rstrip("/")
     url = f"{lvs_url}{path}"
     body = json.dumps(payload).encode("utf-8")
     req = Request(url, data=body, headers={"Content-Type": "application/json"})
-    with urlopen(req, timeout=8) as resp:
+    ctx = _ssl_context() if url.startswith("https://") else None
+    with urlopen(req, timeout=8, context=ctx) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
 def _lvs_get(path: str) -> Dict[str, Any]:
-    """GET from LVS and return the parsed JSON response. Raises on network error."""
+    """GET from LVS and return parsed JSON. Raises on network or protocol error."""
     lvs_url = CONFIG.get("lvs_url", DEFAULT_CONFIG["lvs_url"]).rstrip("/")
     url = f"{lvs_url}{path}"
     req = Request(url, headers={"Accept": "application/json"})
-    with urlopen(req, timeout=8) as resp:
+    ctx = _ssl_context() if url.startswith("https://") else None
+    with urlopen(req, timeout=8, context=ctx) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -174,7 +203,7 @@ def _parse_expires_at(value: Any) -> int:
     # Fallback: 24 hours from now
     return int(time.time()) + 86400
 
-# ─── Endpoint handlers ───────────────────────────────────────────────────────
+# ─── Endpoint handlers ────────────────────────────────────────────────────────
 
 def handle_authorize(request_body: bytes) -> Dict[str, Any]:
     """POST /authorize — check cache, then call LVS."""
@@ -189,6 +218,12 @@ def handle_authorize(request_body: bytes) -> Dict[str, Any]:
 
     if not user_id:
         return {"status": "error", "reason": "missing_external_user_id"}
+    if len(user_id) > MAX_ID_LEN:
+        return {"status": "error", "reason": "external_user_id_too_long"}
+    if kind not in VALID_KINDS:
+        return {"status": "error", "reason": "invalid_kind"}
+    if display is not None:
+        display = str(display)[:MAX_ID_LEN]
 
     license_key = CONFIG.get("license_key", "")
     now = int(time.time())
@@ -220,20 +255,20 @@ def handle_authorize(request_body: bytes) -> Dict[str, Any]:
             cache_put(license_key, user_id, result.get("grant_token", ""), expires_at_ts)
             logger.info("Authorized user %s (live)", user_id)
         else:
-            # Rejected — clear any stale cache
             cache_delete(license_key, user_id)
             logger.info("Rejected user %s: %s", user_id, result.get("reason", "unknown"))
 
         return result
 
-    except (URLError, OSError, Exception) as e:
+    except (URLError, OSError, TimeoutError) as e:
+        # Network outage — fall back to offline cache
         logger.warning("LVS unreachable: %s — checking offline cache for %s", e, user_id)
-
-        # Step 5: Offline fallback — check cache ignoring expiry, within grace window
         grace = int(CONFIG.get("offline_grace_seconds", 86400))
         row = cache_get(license_key, user_id)
         if row and row["cached_at"] and (now - row["cached_at"]) <= grace:
-            logger.info("Offline grant for user %s (cached %ds ago)", user_id, now - row["cached_at"])
+            logger.info(
+                "Offline grant for user %s (cached %ds ago)", user_id, now - row["cached_at"]
+            )
             return {
                 "status": "granted",
                 "cached": True,
@@ -241,9 +276,13 @@ def handle_authorize(request_body: bytes) -> Dict[str, Any]:
                 if row["expires_at"]
                 else None,
             }
-
         logger.warning("No valid cache entry for user %s during LVS outage", user_id)
         return {"status": "error", "reason": "lvs_unreachable"}
+
+    except (json.JSONDecodeError, ValueError, KeyError) as e:
+        # LVS returned a malformed response — do NOT fall back to offline grant
+        logger.error("Bad LVS response for user %s: %s", user_id, e)
+        return {"status": "error", "reason": "lvs_bad_response"}
 
 
 def handle_revoke(request_body: bytes) -> Dict[str, Any]:
@@ -256,22 +295,25 @@ def handle_revoke(request_body: bytes) -> Dict[str, Any]:
     user_id = str(data.get("external_user_id", "")).strip()
     if not user_id:
         return {"status": "error", "reason": "missing_external_user_id"}
+    if len(user_id) > MAX_ID_LEN:
+        return {"status": "error", "reason": "external_user_id_too_long"}
 
     license_key = CONFIG.get("license_key", "")
 
     try:
-        result = _lvs_post(
+        _lvs_post(
             "/api/v1/license/users/revoke",
             {"license_key": license_key, "external_user_id": user_id},
         )
-        cache_delete(license_key, user_id)
-        logger.info("Revoked user %s", user_id)
-        return {"status": "revoked"}
-    except Exception as e:
-        logger.error("Revoke failed for user %s: %s", user_id, e)
-        # Still clear local cache even if LVS call failed
-        cache_delete(license_key, user_id)
-        return {"status": "error", "reason": str(e)}
+        logger.info("Revoked user %s at LVS", user_id)
+    except (URLError, OSError, TimeoutError) as e:
+        logger.error("Revoke at LVS failed for user %s (cache cleared anyway): %s", user_id, e)
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.error("Bad LVS response during revoke for user %s: %s", user_id, e)
+
+    # Always clear local cache regardless of LVS outcome
+    cache_delete(license_key, user_id)
+    return {"status": "revoked"}
 
 
 def handle_status() -> Dict[str, Any]:
@@ -281,11 +323,10 @@ def handle_status() -> Dict[str, Any]:
         "agent_version": VERSION,
         "cache_entries": cache_count(),
     }
-
     try:
         lvs_data = _lvs_get(f"/api/v1/license/users?license_key={license_key}")
         return {**lvs_data, **base}
-    except Exception as e:
+    except (URLError, OSError, TimeoutError, json.JSONDecodeError, ValueError) as e:
         logger.warning("LVS unreachable for /status: %s", e)
         return {
             **base,
@@ -296,16 +337,15 @@ def handle_status() -> Dict[str, Any]:
 
 
 def handle_health() -> Dict[str, Any]:
-    """GET /health — immediate response, no LVS call."""
+    """GET /health — immediate response, no LVS call. No auth required."""
     return {"status": "ok", "version": VERSION}
 
 # ─── HTTP server ──────────────────────────────────────────────────────────────
 
 class AgentHandler(BaseHTTPRequestHandler):
-    """Minimal synchronous HTTP handler — good enough for localhost-only traffic."""
+    """Threaded HTTP handler — localhost-only; bearer-token auth on all endpoints except /health."""
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
-        # Route access logs through our logger instead of stderr
         logger.info("HTTP %s %s", self.address_string(), format % args)
 
     def _send_json(self, data: Dict[str, Any], status: int = 200) -> None:
@@ -316,15 +356,55 @@ class AgentHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _check_auth(self) -> bool:
+        """Verify the local bearer token. No-op if local_token is not configured."""
+        token = CONFIG.get("local_token", "")
+        if not token:
+            return True  # backwards-compatible open mode
+        auth = self.headers.get("Authorization", "")
+        return secrets.compare_digest(auth, f"Bearer {token}")
+
     def _read_body(self) -> bytes:
-        length = int(self.headers.get("Content-Length", 0))
-        return self.rfile.read(length) if length > 0 else b""
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except (ValueError, TypeError):
+            return b""
+        return self.rfile.read(length) if 0 < length <= MAX_BODY_BYTES else b""
 
     def do_POST(self) -> None:
+        # Size gate — reject before reading
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except (ValueError, TypeError):
+            length = 0
+        if length > MAX_BODY_BYTES:
+            self._send_json({"status": "error", "reason": "request_too_large"}, status=413)
+            return
+
+        # Auth gate
+        if not self._check_auth():
+            self._send_json({"status": "error", "reason": "unauthorized"}, status=401)
+            return
+
         body = self._read_body()
+
         if self.path == "/authorize":
             result = handle_authorize(body)
-            self._send_json(result)
+            # Map semantic status to HTTP status codes.
+            # nginx auth_request uses the code (2xx=allow, 4xx=deny).
+            # Body-parsing clients (PHP/Python/Node) also work because they
+            # check result["status"] == "granted" — 403 still returns JSON body.
+            s = result.get("status")
+            r = result.get("reason", "")
+            if s == "granted":
+                http_status = 200
+            elif s == "rejected":
+                http_status = 403
+            elif r in ("lvs_unreachable", "lvs_bad_response"):
+                http_status = 503
+            else:
+                http_status = 400
+            self._send_json(result, status=http_status)
         elif self.path == "/revoke":
             result = handle_revoke(body)
             self._send_json(result)
@@ -332,6 +412,11 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._send_json({"status": "error", "reason": "not_found"}, status=404)
 
     def do_GET(self) -> None:
+        # /health is unauthenticated (safe: reveals nothing sensitive)
+        if self.path != "/health" and not self._check_auth():
+            self._send_json({"status": "error", "reason": "unauthorized"}, status=401)
+            return
+
         if self.path == "/status":
             self._send_json(handle_status())
         elif self.path == "/health":
@@ -339,20 +424,27 @@ class AgentHandler(BaseHTTPRequestHandler):
         else:
             self._send_json({"status": "error", "reason": "not_found"}, status=404)
 
-# ─── Entry point ──────────────────────────────────────────────────────────────
+# ─── Entry point ─────────────────────────────────────────────────────────────
 
 def main() -> None:
+    # Validate LVS URL before opening any sockets
+    _validate_lvs_url(CONFIG.get("lvs_url", DEFAULT_CONFIG["lvs_url"]))
+
     init_db()
     port = int(CONFIG.get("port", 8788))
 
-    # Security: always bind to localhost only — never 0.0.0.0
+    # Always bind to localhost only — never 0.0.0.0
     host = "127.0.0.1"
-    server = HTTPServer((host, port), AgentHandler)
-    logger.info("LVS Agent v%s listening on %s:%d", VERSION, host, port)
-    logger.info(
-        "Security note: bound to localhost only — no external access. "
-        "No authentication required for local callers by design."
-    )
+    auth_mode = "token-authenticated" if CONFIG.get("local_token") else "OPEN (no local_token set)"
+    server = ThreadingHTTPServer((host, port), AgentHandler)
+    logger.info("LVS Agent v%s listening on %s:%d [%s]", VERSION, host, port, auth_mode)
+
+    if not CONFIG.get("local_token"):
+        logger.warning(
+            "No local_token configured — any local process can call this agent. "
+            "Set local_token in %s for production use.",
+            CONFIG_PATH,
+        )
 
     try:
         server.serve_forever()

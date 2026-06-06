@@ -64,15 +64,15 @@
     </tr>
     <tr>
       <th>Status</th>
-      <td>v1.0.0 — initial implementation complete.</td>
+      <td>v1.1.0 — security hardening complete. Bearer-token auth, dedicated unprivileged service user, correct HTTP status codes, HTTPS enforcement.</td>
     </tr>
     <tr>
       <th>Install</th>
-      <td>One-line: <code>curl -sSL https://raw.githubusercontent.com/JeremiahButtler/lvs-agent/main/install.sh | sudo bash</code> — or clone the repo and run <code>sudo bash install.sh</code>.</td>
+      <td>One-line: <code>curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/JeremiahButtler/lvs-agent/main/install.sh | sudo bash</code> — or clone the repo and run <code>sudo bash install.sh</code>.</td>
     </tr>
     <tr>
       <th>Architecture</th>
-      <td><code>agent.py</code> — Python 3 stdlib HTTP server (optional <code>requests</code>); <code>install.sh</code> — distro-detecting installer (apt/dnf/yum/apk); <code>lvs-agent.service</code> — systemd unit; <code>snippets/</code> — PHP, Python, Node.js, and nginx integration examples. Config at <code>/opt/lvs-agent/config.json</code> (mode 600). Grant cache SQLite at <code>/opt/lvs-agent/grants.db</code>.</td>
+      <td><code>agent.py</code> — Python 3 <code>ThreadingHTTPServer</code> (stdlib-only); bearer-token auth (<code>local_token</code>); 200/403/503 status codes; HTTPS enforcement. <code>install.sh</code> — distro-detecting installer (apt/dnf/yum/apk); creates <code>lvs-agent</code> system user; generates <code>local_token</code>. <code>lvs-agent.service</code> — systemd unit with full hardening (NoNewPrivileges, ProtectSystem, PrivateTmp). <code>snippets/</code> — PHP, Python, Node.js, nginx examples (all pass <code>Authorization: Bearer &lt;token&gt;</code>). Config at <code>/opt/lvs-agent/config.json</code> (mode 600, owned by <code>lvs-agent</code>). Grant cache SQLite at <code>/opt/lvs-agent/grants.db</code>.</td>
     </tr>
     <tr>
       <th>Repo</th>
@@ -80,17 +80,37 @@
     </tr>
     <tr>
       <th>What's next</th>
-      <td>Phase 4: acceptance testing on aideamaker.com + bearlydefares.com. Validate full authorize/revoke/offline-grace flow against live LVS.</td>
+      <td>Build integration documentation page on the LVS website (detailed install guide for client users, design-review guided). Phase 4: acceptance testing on aideamaker.com + bearlydefares.com. Validate full authorize/revoke/offline-grace flow against live LVS.</td>
     </tr>
   </table>
 </div>
 
 <div class="card">
   <div class="card-head-row">
-    <h2>Change history (1 entry)</h2>
+    <h2>Change history (2 entries)</h2>
     <input type="search" id="log-search" placeholder="Search history…" autocomplete="off">
   </div>
   <div id="log-entries">
+
+<div class="log-entry" data-text="2026-06-05 security hardening v1.1.0 bearer token auth local_token drop root systemd hardening unprivileged user lvs-agent NoNewPrivileges ProtectSystem nginx fail-open status codes 200 403 503 https enforcement threading threadinghttpserver request size cap input validation exception narrowing curl proto https">
+  <h3>2026-06-05 — Security hardening: v1.1.0</h3>
+  <ul>
+    <li><strong>What changed:</strong> Six security vulnerabilities addressed; agent bumped to v1.1.0.</li>
+    <li><strong>Why:</strong> The agent was running as root with no local auth — any process on the client server could trigger paid billing upgrades, revoke legitimate users, or leak user IDs. The nginx integration also silently failed open, allowing unlicensed users through regardless of licensing status.</li>
+    <li><strong>Details:</strong>
+      <ul>
+        <li><strong>H1 — Local API auth:</strong> Installer generates a random <code>local_token</code> (stored in <code>config.json</code> 600); every request except <code>GET /health</code> requires <code>Authorization: Bearer &lt;token&gt;</code>. Prevents unauthorized seat consumption and billing triggers.</li>
+        <li><strong>H2 — Drop root + systemd hardening:</strong> Service now runs as dedicated system user <code>lvs-agent</code> (no shell, no home). Unit adds <code>NoNewPrivileges=yes</code>, <code>ProtectSystem=strict</code>, <code>ProtectHome=yes</code>, <code>PrivateTmp=yes</code>, <code>CapabilityBoundingSet=</code>.</li>
+        <li><strong>H3 — Correct HTTP status codes (fix nginx fail-open):</strong> Agent returns 200 granted / 403 rejected / 503 unreachable. Previously the agent returned 200 for both granted and rejected; since nginx <code>auth_request</code> only reads the status code, all users were silently allowed through.</li>
+        <li><strong>M4 — HTTPS enforcement:</strong> Agent refuses to start if <code>lvs_url</code> is non-HTTPS and non-localhost. Passes explicit <code>ssl.create_default_context()</code> to <code>urlopen</code>.</li>
+        <li><strong>M6 — Request size cap + ThreadingHTTPServer:</strong> Body capped at 64 KB. Server switched to <code>ThreadingHTTPServer</code> so a slow LVS call doesn't block other requests.</li>
+        <li><strong>L7–L10:</strong> Narrowed exception catch (bad LVS responses no longer trigger offline grants); <code>kind</code> whitelisted; field length caps; dead <code>import asyncio</code> removed; <code>curl</code> flags hardened to <code>--proto '=https' --tlsv1.2</code>.</li>
+        <li>All four client snippets updated to pass <code>Authorization: Bearer</code> from <code>LVS_LOCAL_TOKEN</code> env var.</li>
+      </ul>
+    </li>
+    <li><strong>Files touched:</strong> <code>agent.py</code>, <code>lvs-agent.service</code>, <code>install.sh</code>, <code>snippets/nginx_auth.conf</code>, <code>snippets/php_example.php</code>, <code>snippets/python_example.py</code>, <code>snippets/node_example.js</code>.</li>
+  </ul>
+</div>
 
 <div class="log-entry" data-text="2026-06-05 initial implementation lvs agent v1.0.0 agent.py asyncio http server authorize revoke status health sqlite grant cache offline grace install.sh distro-detecting installer apt dnf yum apk systemd service snippets php python nodejs nginx">
   <h3>2026-06-05 — Initial implementation: LVS Agent v1.0.0</h3>
